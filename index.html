@@ -395,7 +395,7 @@ table tr:hover td{background:rgba(242,204,56,.06)}
     <thead><tr>
       <th>SKU</th><th>Product</th><th>Supplier</th>
       <th>Level 1</th><th>Level 2</th><th>Level 3</th>
-      <th>Expiry Flag</th><th>Shelf Life</th>
+      <th>Expiry Flag</th><th>Shelf Life</th><th>VAT</th>
     </tr></thead>
     <tbody id="resTbody"></tbody>
   </table>
@@ -606,11 +606,16 @@ function syncFromSheets(silent) {
     prodRows.forEach(function(row) {
       var sku = (row['Product SKU'] || row['sku'] || '').trim();
       if (!sku) return;
+      // VAT: try every possible header name, then positional col H (index 7)
+      var vatByName = (row['VAT'] || row['vat'] || row['Tax Rate'] || row['tax_rate'] ||
+                       row['vat_rate'] || row['TVA'] || row['tva'] || row['Tax'] || row['tax'] || '').trim();
+      var rowKeys = Object.keys(row);
+      var vatByPos = rowKeys.length > 7 ? (row[rowKeys[7]] || '').trim() : '';
       newProds.push({
         l1: row['Level 1'] || '', l2: row['Level 2'] || '', l3: row['Level 3'] || '',
         supplier: row['Supplier Name'] || '', sku: sku,
         name: row['Product Name Local'] || '',
-        vat: row['VAT'] || row['vat'] || ''
+        vat: vatByName || vatByPos
       });
     });
 
@@ -775,7 +780,8 @@ function renderResults(results, notFound) {
       '<td style="font-size:12px;color:#6b7280">'+p.supplier+'</td>'+
       '<td style="font-size:12px">'+p.l1+'</td><td style="font-size:12px">'+p.l2+'</td><td style="font-size:12px">'+p.l3+'</td>'+
       '<td><span class="badge '+fc+'">'+flag+'</span></td>'+
-      '<td><span class="sl '+slc+'">'+sl+'</span></td>';
+      '<td><span class="sl '+slc+'">'+sl+'</span></td>'+
+      '<td style="font-size:12px;color:#374151">'+(p.vat||'—')+'</td>';
     tbody.appendChild(tr);
   });
   tableWrap.style.display = 'block'; noResDiv.style.display = 'none';
@@ -808,25 +814,31 @@ function clearSearch() {
 function dlCSV() {
   if (!lastResults.length) { toast('No results to export', 'warn'); return; }
   showProg('Generating CSV...');
-  var BOM = '\uFEFF', csv = BOM;
-  var table = document.getElementById('resTable');
-  table.querySelectorAll('tr').forEach(function(row) {
-    var cells = Array.from(row.querySelectorAll('th,td')).map(function(c) {
-      var v = c.textContent.trim();
-      if (v.includes(',') || v.includes('"') || v.includes('\n')) v = '"' + v.replace(/"/g,'""') + '"';
-      return v;
-    });
-    csv += cells.join(',') + '\r\n';
+  var BOM = '\uFEFF';
+  var headers = ['SKU','Product Type','Current Product Title','Expiry Flag','Shelf Life (days)','VAT'];
+  var rows = [headers];
+  lastResults.forEach(function(p) {
+    var rule = getRule(p.l1, p.l2, p.l3);
+    var flag = rule ? (rule.hasExpiry ? 'Yes' : 'No') : '';
+    var sl   = (rule && rule.hasExpiry) ? rule.shelfLife : '';
+    rows.push([p.sku||'', 'Standard', p.name||'', flag, sl===''?'':String(sl), p.vat||'']);
   });
+  var csv = BOM + rows.map(function(row) {
+    return row.map(function(v) {
+      var s = String(v);
+      if (s.includes(',') || s.includes('"') || s.includes('\n')) s = '"' + s.replace(/"/g,'""') + '"';
+      return s;
+    }).join(',');
+  }).join('\r\n');
   var blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'Glovo_Expiry_' + new Date().toISOString().split('T')[0] + '.csv';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href);
-  hideProg(); toast('\u2705 CSV downloaded — ' + lastResults.length + ' rows', 'success');
+  a.download = 'CI_MFC_Expiry_' + new Date().toISOString().split('T')[0] + '.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+  hideProg();
+  toast('\u2705 CSV downloaded \u2014 ' + lastResults.length + ' rows', 'success');
 }
-
-// ── EXPORT XLSX ───────────────────────────────────────────────────────────────
 function dlXLSX() {
   if (!lastResults.length) { toast('No results to export', 'warn'); return; }
   showProg('Generating XLSX...');
@@ -845,7 +857,7 @@ function dlXLSX() {
         ws[addr] = {t:isN?'n':'s',v:val,s:sty};
       }
       sc(1,p.sku||''); sc(2,'Standard'); sc(5,p.name||''); sc(14,flag);
-      if (sl!==null) sc(15,sl,true); if (p.vat) sc(16,p.vat);
+      if (sl!==null) sc(15,sl,true); sc(16, p.vat !== undefined && p.vat !== '' ? p.vat : '');  // Q: VAT
     });
     var range = XLSX.utils.decode_range(ws['!ref']||'A1:AB4');
     range.e.r = Math.max(range.e.r, 4+lastResults.length-1);
@@ -938,7 +950,7 @@ function applyUpdate() {
         sku:p['Product SKU']||'', name:p['Product Name Local']||'',
         supplier:p['Supplier Name']||'', l1:p['Level 1']||'',
         l2:p['Level 2']||'', l3:p['Level 3']||'',
-        vat:p['VAT']||p['vat']||p['Tax Rate']||p['tax_rate']||''
+        vat:p['VAT']||p['vat']||p['Tax Rate']||p['tax_rate']||p['TVA']||p['tva']||p['Tax']||p['tax']||''
       }; }).filter(function(p) { return p.sku; });
       if (!newProds.length) throw new Error('Products: no valid rows found');
       PRODUCTS_DATA.length=0; PRODUCTS_DATA.push.apply(PRODUCTS_DATA, newProds);
