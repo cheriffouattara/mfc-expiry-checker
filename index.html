@@ -313,6 +313,9 @@ function init() {
   var dlE = document.getElementById('dlExpiry');
   if (dlP) dlP.href = 'data:text/csv;base64,' + CSV_PRODUCTS_B64;
   if (dlE) dlE.href = 'data:text/csv;base64,' + CSV_EXPIRY_B64;
+  // Load saved Apps Script URL from localStorage
+  var savedUrl = localStorage.getItem('glovo_apps_script_url');
+  if (savedUrl) { APPS_SCRIPT_URL = savedUrl; console.log('Apps Script URL loaded from storage'); }
   // Auto-pull from Sheets on load
   pullFromSheets(true);
 }
@@ -370,13 +373,37 @@ function pullFromSheets(silent) {
   status.style.color = '#f39c12';
 
   // Fetch Products sheet (columns A:H = L1,L2,L3,Supplier,SKU,Name,Warehouses,Stock)
-  var prodUrl = SHEETS_URL + SHEET_ID + '/values/Products!A2:H?key=' + API_KEY;
-  var expUrl  = SHEETS_URL + SHEET_ID + '/values/Expiry!A2:E?key=' + API_KEY;
-
-  Promise.all([
-    fetch(prodUrl).then(function(r){ if(!r.ok) throw new Error('Products sheet error: '+r.status); return r.json(); }),
-    fetch(expUrl).then(function(r){ if(!r.ok) throw new Error('Expiry sheet error: '+r.status); return r.json(); })
-  ]).then(function(results) {
+  // First fetch sheet metadata to get actual tab names
+  var metaUrl = SHEETS_URL + SHEET_ID + '?key=' + API_KEY + '&fields=sheets.properties';
+  
+  fetch(metaUrl).then(function(r) {
+    if (!r.ok) {
+      if (r.status === 403) throw new Error('Access denied (403) — make sure the Sheet is shared publicly');
+      if (r.status === 400) throw new Error('Invalid Sheet ID (400) — check the Sheet ID');
+      throw new Error('Cannot access Google Sheet: ' + r.status);
+    }
+    return r.json();
+  }).then(function(meta) {
+    // Get actual tab names
+    var tabs = meta.sheets.map(function(s){ return s.properties.title; });
+    console.log('Sheet tabs found:', tabs);
+    
+    // Find Products and Expiry tabs (case-insensitive)
+    var prodTab = tabs.find(function(t){ return t.toLowerCase().includes('product'); }) || tabs[0];
+    var expTab  = tabs.find(function(t){ return t.toLowerCase().includes('expir'); }) || tabs[1];
+    
+    if (!prodTab) throw new Error('No Products tab found. Tabs: ' + tabs.join(', '));
+    if (!expTab)  throw new Error('No Expiry tab found. Tabs: ' + tabs.join(', '));
+    
+    var prodUrl = SHEETS_URL + SHEET_ID + '/values/' + encodeURIComponent(prodTab) + '!A2:I?key=' + API_KEY;
+    var expUrl  = SHEETS_URL + SHEET_ID + '/values/' + encodeURIComponent(expTab)  + '!A2:E?key=' + API_KEY;
+    
+    return Promise.all([
+      fetch(prodUrl).then(function(r){ if(!r.ok) return r.text().then(function(t){throw new Error('Products tab ('+prodTab+'): HTTP '+r.status);}); return r.json(); }),
+      fetch(expUrl).then(function(r){  if(!r.ok) return r.text().then(function(t){throw new Error('Expiry tab ('+expTab+'): HTTP '+r.status);}); return r.json(); }),
+      Promise.resolve(tabs)
+    ]);
+  }).then(function(results) {
     var prodData = results[0], expData = results[1];
     var newProds = [], newExp = [];
 
@@ -428,18 +455,26 @@ function pullFromSheets(silent) {
     btn.disabled = false;
   }).catch(function(err) {
     if (!silent) hideProgress();
-    status.textContent = '\u274C ' + err.message;
+    var msg = err.message || 'Unknown error';
+    status.textContent = '\u274C ' + msg;
     status.style.color = '#e74c3c';
-    if (!silent) showToast('\u274C Sheets sync failed: ' + err.message, 'error');
+    if (!silent) showToast('\u274C Sheets sync failed: ' + msg, 'error');
+    else console.warn('Auto-sync failed (using embedded data):', msg);
     btn.disabled = false;
     console.error('Pull error:', err);
   });
 }
 
-// ===== GOOGLE SHEETS — PUSH =====
+// ===== GOOGLE SHEETS — PUSH (via Apps Script Web App) =====
+var APPS_SCRIPT_URL = localStorage.getItem('glovo_apps_script_url') || '';
+
 function pushToSheets() {
   if (!pendingProducts && !pendingExpiry) {
     showToast('\u26A0\uFE0F Apply a CSV update first, then push to Sheets', 'warn');
+    return;
+  }
+  if (!APPS_SCRIPT_URL) {
+    document.getElementById('appsScriptModal').style.display = 'flex';
     return;
   }
   var btn = document.getElementById('pushBtn');
@@ -449,58 +484,44 @@ function pushToSheets() {
   status.textContent = '\u23F3 Uploading...';
   status.style.color = '#f39c12';
 
-  var requests = [];
-
-  // Build Products sheet values: L1,L2,L3,Supplier,SKU,Name,Warehouses,VAT
+  var payload = {};
   if (pendingProducts) {
-    var prodValues = [['Level 1','Level 2','Level 3','Supplier Name','Product SKU','Product Name Local','Number of Active Warehouses','VAT']];
-    pendingProducts.forEach(function(p){
-      prodValues.push([p.l1||'', p.l2||'', p.l3||'', p.supplier||'', p.sku||'', p.name||'', '', p.vat||'']);
+    payload.products = pendingProducts.map(function(p){
+      return [p.l1||'',p.l2||'',p.l3||'',p.supplier||'',p.sku||'',p.name||'','',p.vat||''];
     });
-    requests.push(
-      fetch(SHEETS_URL + SHEET_ID + '/values/Products!A1:H?valueInputOption=RAW&key=' + API_KEY, {
-        method: 'PUT',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ range: 'Products!A1:H', majorDimension: 'ROWS', values: prodValues })
-      }).then(function(r){ if(!r.ok) return r.text().then(function(t){ throw new Error('Products push: '+t); }); return r.json(); })
-    );
   }
-
-  // Build Expiry sheet values: L1,L2,L3,HasExpiry,ShelfLife
   if (pendingExpiry) {
-    var expValues = [['Level 1','Level 2','Level 3','Does it have expiry date?','Minimum shelf life']];
-    pendingExpiry.forEach(function(e){
-      expValues.push([e.l1||'', e.l2||'', e.l3||'', e.hasExpiry?'YES':'NO', e.shelfLife||0]);
+    payload.expiry = pendingExpiry.map(function(e){
+      return [e.l1||'',e.l2||'',e.l3||'',e.hasExpiry?'YES':'NO',e.shelfLife||0];
     });
-    requests.push(
-      fetch(SHEETS_URL + SHEET_ID + '/values/Expiry!A1:E?valueInputOption=RAW&key=' + API_KEY, {
-        method: 'PUT',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ range: 'Expiry!A1:E', majorDimension: 'ROWS', values: expValues })
-      }).then(function(r){ if(!r.ok) return r.text().then(function(t){ throw new Error('Expiry push: '+t); }); return r.json(); })
-    );
   }
 
-  Promise.all(requests).then(function() {
+  fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  }).then(function() {
+    // no-cors returns opaque response — assume success if no network error
     hideProgress();
     status.textContent = '\u2705 Pushed to Google Sheets!';
     status.style.color = '#2ecc71';
-    var badge = document.getElementById('dbSourceBadge');
-    badge.textContent = '\uD83D\uDCCA Sheets DB';
-    badge.className = 'db-source-badge sheets';
+    document.getElementById('dbSourceBadge').textContent = '\uD83D\uDCCA Sheets DB';
+    document.getElementById('dbSourceBadge').className = 'db-source-badge sheets';
     btn.disabled = false;
     pendingProducts = null; pendingExpiry = null;
     document.getElementById('pushBtn').disabled = true;
-    showToast('\u2705 Database pushed to Google Sheets — all users will see the update!', 'success');
+    showToast('\u2705 Database pushed to Google Sheets \u2014 all users will see the update!', 'success');
   }).catch(function(err) {
     hideProgress();
-    status.textContent = '\u274C ' + err.message;
+    status.textContent = '\u274C Push failed: ' + err.message;
     status.style.color = '#e74c3c';
     btn.disabled = false;
     showToast('\u274C Push failed: ' + err.message, 'error');
     console.error('Push error:', err);
   });
 }
+
 
 // ===== SEARCH =====
 function doSearch() {
@@ -773,8 +794,78 @@ document.addEventListener('DOMContentLoaded',function(){
   dz.addEventListener('drop',function(e){e.preventDefault();dz.classList.remove('drag-over');handleFileSelect(e.dataTransfer.files);});
 });
 
+
+// ===== SAVE APPS SCRIPT URL =====
+function saveAppsScriptUrl() {
+  var url = document.getElementById('appsScriptInput').value.trim();
+  if (!url || !url.startsWith('https://script.google.com')) {
+    showToast('\u26A0\uFE0F Please enter a valid Apps Script Web App URL', 'warn');
+    return;
+  }
+  APPS_SCRIPT_URL = url;
+  localStorage.setItem('glovo_apps_script_url', url);
+  document.getElementById('appsScriptModal').style.display = 'none';
+  showToast('\u2705 Apps Script URL saved!', 'success');
+  // Now trigger push
+  pushToSheets();
+}
+
 // ===== START =====
 init();
 </script>
+
+<!-- APPS SCRIPT SETUP MODAL -->
+<div id="appsScriptModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:20000;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#fff;border-radius:16px;padding:28px;max-width:600px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.25)">
+    <h2 style="font-size:16px;color:#1a1a2e;margin-bottom:6px">&#x2699;&#xFE0F; One-time Setup: Google Apps Script</h2>
+    <p style="font-size:13px;color:#6b7280;margin-bottom:18px">To enable Push to Sheets, deploy a free Apps Script Web App (takes ~3 minutes).</p>
+    <ol style="font-size:13px;color:#374151;line-height:2;padding-left:18px;margin-bottom:18px">
+      <li>Open your <a href="https://script.google.com" target="_blank" style="color:#00a082;font-weight:600">Google Apps Script</a></li>
+      <li>Create a <strong>New Project</strong>, paste the script below</li>
+      <li>Click <strong>Deploy → New deployment → Web App</strong></li>
+      <li>Set <em>Execute as</em>: <strong>Me</strong> · <em>Who has access</em>: <strong>Anyone</strong></li>
+      <li>Copy the <strong>Web App URL</strong> and paste it below</li>
+    </ol>
+    <div style="background:#1a1a2e;border-radius:10px;padding:14px;margin-bottom:16px;font-family:monospace;font-size:11px;color:#e0e0e0;white-space:pre;overflow-x:auto">var SHEET_ID = '12XbeGG7UBFtnX-GMw6HorhVJufm1AWz9y6R0iEA06iI';
+
+function doPost(e) {
+  var data = JSON.parse(e.postData.contents);
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  
+  if (data.products) {
+    var ws = ss.getSheetByName('Products') || ss.insertSheet('Products');
+    ws.clearContents();
+    var hdr = [['Level 1','Level 2','Level 3','Supplier Name','Product SKU',
+                'Product Name Local','Warehouses','VAT']];
+    ws.getRange(1,1,1,8).setValues(hdr);
+    if (data.products.length > 0)
+      ws.getRange(2,1,data.products.length,8).setValues(data.products);
+  }
+  if (data.expiry) {
+    var we = ss.getSheetByName('Expiry') || ss.insertSheet('Expiry');
+    we.clearContents();
+    var hdrE = [['Level 1','Level 2','Level 3','Does it have expiry date?','Minimum shelf life']];
+    we.getRange(1,1,1,5).setValues(hdrE);
+    if (data.expiry.length > 0)
+      we.getRange(2,1,data.expiry.length,5).setValues(data.expiry);
+  }
+  return ContentService.createTextOutput(
+    JSON.stringify({status:'ok'})
+  ).setMimeType(ContentService.MimeType.JSON);
+}
+
+function doGet(e) {
+  return ContentService.createTextOutput(
+    JSON.stringify({status:'ok',message:'Glovo Expiry Tool API ready'})
+  ).setMimeType(ContentService.MimeType.JSON);
+}</div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <input id="appsScriptInput" type="text" placeholder="Paste Web App URL here..." style="flex:1;padding:10px 14px;border-radius:8px;border:2px solid #dde1e7;font-size:13px;outline:none;min-width:200px">
+      <button onclick="saveAppsScriptUrl()" style="padding:10px 20px;border-radius:8px;border:none;background:#00a082;color:#fff;font-size:13px;font-weight:700;cursor:pointer">Save &amp; Push</button>
+      <button onclick="document.getElementById('appsScriptModal').style.display='none'" style="padding:10px 14px;border-radius:8px;border:1px solid #dde1e7;background:#fff;color:#6b7280;font-size:13px;cursor:pointer">Cancel</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
