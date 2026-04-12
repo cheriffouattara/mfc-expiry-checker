@@ -21,9 +21,9 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#1a1a2e;mi
 .input-row textarea:focus{border-color:#00a082;background:#fff}
 .input-row textarea::placeholder{color:#aab0bb}
 .btn-row{display:flex;gap:12px;flex-wrap:wrap}
-.btn-search{padding:14px 28px;border-radius:10px;border:none;background:#00a082;color:#fff;font-size:15px;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap}
+.btn-search{padding:12px 20px;border-radius:10px;border:none;background:#00a082;color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap;width:110px}
 .btn-search:hover{background:#00b894;transform:translateY(-1px)}
-.btn-clear{padding:14px 20px;border-radius:10px;border:1px solid #dde1e7;background:#fff;color:#888;font-size:15px;cursor:pointer;transition:all .2s}
+.btn-clear{padding:12px 20px;border-radius:10px;border:1px solid #dde1e7;background:#fff;color:#888;font-size:14px;cursor:pointer;transition:all .2s;width:110px}
 .btn-clear:hover{border-color:#00a082;color:#00a082}
 .stats-bar{display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap}
 .stat-card{background:#fff;border-radius:12px;padding:16px 20px;border:1px solid #e2e5ea;box-shadow:0 1px 4px rgba(0,0,0,.05);flex:1;min-width:140px}
@@ -58,6 +58,20 @@ table.results-tbl tr:hover td{background:rgba(242,204,56,.08)}
 .no-results h3{font-size:18px;margin-bottom:8px;color:#6b7280}
 .table-wrapper{overflow-x:auto;border-radius:12px;border:1px solid #e2e5ea;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.06)}
 @media(max-width:768px){.input-row{flex-direction:column}.stats-bar{flex-direction:column}.btn-row{flex-direction:column}.top-bar{flex-direction:column;text-align:center}table.results-tbl{font-size:12px}table.results-tbl th,table.results-tbl td{padding:6px 8px}}
+
+/* ===== PROGRESS BAR ===== */
+#progressOverlay{display:none;position:fixed;top:0;left:0;right:0;z-index:9999;height:3px;background:rgba(0,160,130,.15)}
+#progressBar{height:100%;width:0%;background:linear-gradient(90deg,#00a082,#F2CC38);transition:width .3s ease;border-radius:0 2px 2px 0}
+#progressLabel{position:fixed;top:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.78);color:#fff;font-size:11px;font-weight:600;padding:5px 16px;border-radius:20px;z-index:10000;display:none;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+
+/* ===== TOAST NOTIFICATIONS ===== */
+#toastContainer{position:fixed;bottom:24px;right:24px;z-index:10001;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+.toast{padding:11px 18px;border-radius:10px;font-size:13px;font-weight:600;color:#fff;box-shadow:0 4px 16px rgba(0,0,0,.18);opacity:0;transform:translateY(12px);transition:all .25s;max-width:340px;line-height:1.4}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.success{background:linear-gradient(135deg,#00a082,#007a5e)}
+.toast.error{background:linear-gradient(135deg,#e74c3c,#c0392b)}
+.toast.warn{background:linear-gradient(135deg,#f39c12,#e67e22)}
+.toast.info{background:linear-gradient(135deg,#3498db,#2980b9)}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
@@ -160,21 +174,25 @@ Update Looker DB
 </div>
 
 <div class="search-section">
-<h2>🔍 SKU Search</h2>
-<p id="dbCount">Loading database...</p>
-<div class="input-row">
-<textarea id="searchInput" placeholder="Enter SKUs (e.g. 67985, 06W941, 9K4K94, ...)" autofocus onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doSearch()}"></textarea>
-</div>
-<div class="btn-row">
-<button class="btn-search" onclick="doSearch()">🔎 Search</button>
-<button class="btn-clear" onclick="clearAll()">✕ Clear</button>
-</div>
-<div class="quick-filters">
-<button class="quick-filter active" data-f="all" onclick="applyFilter(this)">All</button>
-<button class="quick-filter" data-f="yes" onclick="applyFilter(this)">Expiry: YES</button>
-<button class="quick-filter" data-f="no" onclick="applyFilter(this)">Expiry: NO</button>
-<button class="quick-filter" data-f="critical" onclick="applyFilter(this)">⚠️ Critical (&lt;10d)</button>
-</div>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+    <div>
+      <h2>🔍 SKU Search</h2>
+      <p id="dbCount">Loading database...</p>
+    </div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:flex-start">
+    <textarea id="searchInput" placeholder="Enter SKUs (e.g. 67985, 06W941, 9K4K94, ...)&#10;One per line, or comma/space separated — press Enter to search" autofocus onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doSearch()}" style="flex:1;padding:14px 18px;border-radius:10px;border:2px solid #dde1e7;background:#f8f9fb;color:#1a1a2e;font-size:14px;transition:border .2s;outline:none;font-family:monospace;min-height:90px;resize:vertical"></textarea>
+    <div style="display:flex;flex-direction:column;gap:8px;padding-top:2px">
+      <button class="btn-search" onclick="doSearch()" title="Search (Enter)">🔎 Search</button>
+      <button class="btn-clear" onclick="clearAll()" title="Clear all">✕ Clear</button>
+    </div>
+  </div>
+  <div class="quick-filters" style="margin-top:10px">
+    <button class="quick-filter active" data-f="all" onclick="applyFilter(this)">All</button>
+    <button class="quick-filter" data-f="yes" onclick="applyFilter(this)">Expiry: YES</button>
+    <button class="quick-filter" data-f="no" onclick="applyFilter(this)">Expiry: NO</button>
+    <button class="quick-filter" data-f="critical" onclick="applyFilter(this)">⚠️ Critical (&lt;10d)</button>
+  </div>
 </div>
 
 <div id="statsBar" class="stats-bar" style="display:none">
@@ -263,34 +281,46 @@ function getExpiryRule(l1, l2, l3) {
 // ===== RECHERCHE =====
 function doSearch() {
   const input = document.getElementById('searchInput').value.trim();
-  if (!input) return;
-  
-  // Parser les SKUs (séparés par virgule, espace, tab, newline)
+  if (!input) {
+    showToast('⚠️ Please enter at least one SKU', 'warn');
+    return;
+  }
+
+  showProgress('Searching SKUs...');
+
   const skus = input.split(/[,\s\n\r\t]+/)
     .map(s => s.trim())
-    .filter(s => s && s.length > 0)
+    .filter(s => s.length > 0)
     .map(s => s.toUpperCase());
-  
-  let results = [];
+
+  const results = [];
+  const notFound = [];
   const seen = new Set();
-  
-  // Chercher chaque SKU
+
   skus.forEach(sku => {
-    if (PRODUCTS_MAP[sku] && !seen.has(sku)) {
-      results.push(PRODUCTS_MAP[sku]);
-      seen.add(sku);
-    }
+    if (seen.has(sku)) return;
+    seen.add(sku);
+    if (PRODUCTS_MAP[sku]) results.push(PRODUCTS_MAP[sku]);
+    else notFound.push(sku);
   });
-  
+
   lastResults = results;
   currentFilter = 'all';
-  
-  // Reset filters
   document.querySelectorAll('.quick-filter').forEach(b => {
     b.classList.toggle('active', b.dataset.f === 'all');
   });
-  
-  render(results);
+
+  hideProgress();
+  render(results, notFound);
+
+  if (results.length > 0) {
+    const msg = notFound.length > 0
+      ? `✅ ${results.length} found, ⚠️ ${notFound.length} not found`
+      : `✅ ${results.length} product(s) found`;
+    showToast(msg, notFound.length > 0 ? 'warn' : 'success');
+  } else {
+    showToast('❌ No SKUs found in database', 'error');
+  }
 }
 
 // ===== FILTRAGE =====
@@ -453,6 +483,7 @@ function downloadCSV() {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(link.href);
+  showToast('✅ CSV downloaded successfully', 'success');
 }
 
 // ===== COPIER LE TABLEAU =====
@@ -471,6 +502,7 @@ function copyTable() {
     const orig = btn.innerHTML;
     btn.innerHTML = '✓ Copied!';
     btn.style.color = '#00a082';
+    showToast('✅ Table copied to clipboard', 'success');
     setTimeout(() => {
       btn.innerHTML = orig;
       btn.style.color = '';
@@ -580,8 +612,8 @@ function applyUpdate() {
   const statusEl = document.getElementById('updateStatus');
   if (!stagedFiles.products && !stagedFiles.expiry) return;
 
-  statusEl.textContent = '⏳ Applying update...';
-  statusEl.style.color = '#f39c12';
+  statusEl.textContent = '';
+  showProgress('Updating database...');
 
   try {
     let msgs = [];
@@ -630,6 +662,8 @@ function applyUpdate() {
 
     statusEl.innerHTML = `✅ Updated — ${msgs.join(' · ')}`;
     statusEl.style.color = '#2ecc71';
+    hideProgress();
+    showToast(`✅ Database updated — ${msgs.join(' · ')}`, 'success');
 
     // Clear results
     document.getElementById('results').innerHTML = '';
@@ -641,6 +675,8 @@ function applyUpdate() {
   } catch (err) {
     statusEl.textContent = '❌ ' + err.message;
     statusEl.style.color = '#e74c3c';
+    hideProgress();
+    showToast('❌ ' + err.message, 'error');
     console.error(err);
   }
 }
@@ -684,6 +720,53 @@ function parseCSV(text) {
     result.push(row);
   }
   return result;
+}
+
+// ===== PROGRESS & TOAST SYSTEM =====
+let _progressTimer = null;
+
+function showProgress(label) {
+  const overlay = document.getElementById('progressOverlay');
+  const bar = document.getElementById('progressBar');
+  const lbl = document.getElementById('progressLabel');
+  overlay.style.display = 'block';
+  lbl.style.display = 'block';
+  lbl.textContent = label || 'Loading...';
+  bar.style.width = '0%';
+  clearInterval(_progressTimer);
+  let w = 0;
+  _progressTimer = setInterval(() => {
+    w = Math.min(w + Math.random() * 12, 88);
+    bar.style.width = w + '%';
+  }, 120);
+}
+
+function hideProgress() {
+  clearInterval(_progressTimer);
+  const bar = document.getElementById('progressBar');
+  const overlay = document.getElementById('progressOverlay');
+  const lbl = document.getElementById('progressLabel');
+  bar.style.width = '100%';
+  setTimeout(() => {
+    overlay.style.display = 'none';
+    lbl.style.display = 'none';
+    bar.style.width = '0%';
+  }, 350);
+}
+
+function showToast(msg, type) {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = 'toast ' + (type || 'info');
+  toast.textContent = msg;
+  container.appendChild(toast);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => toast.classList.add('show'));
+  });
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 3500);
 }
 
 // ===== TOGGLE PANNEAU MISE À JOUR =====
@@ -744,6 +827,7 @@ function downloadXLSX() {
 
   const today = new Date().toISOString().split('T')[0];
   XLSX.writeFile(wb, 'CI_MFC_Expiry_update_' + today + '.xlsx', { bookSST: false, type: 'array', cellStyles: true });
+  showToast('✅ XLSX template exported successfully', 'success');
 }
 
 // ===== AUTO-INIT =====
@@ -759,5 +843,11 @@ init();
   if (dlE) dlE.href = 'data:text/csv;base64,' + b64e;
 })();
 </script>
+
+<!-- PROGRESS BAR -->
+<div id="progressOverlay"><div id="progressBar"></div></div>
+<div id="progressLabel"></div>
+<!-- TOAST CONTAINER -->
+<div id="toastContainer"></div>
 </body>
 </html>
